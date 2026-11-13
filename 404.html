@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Geist Font</title>
+<style>html{background:#000;color:#888;font:14px ui-monospace,monospace}body{margin:40px}</style>
+<body>Loading…
+<script>
+(async () => {
+  const BASE = "/geist-proofer/";
+  const fail = m => { document.body.textContent = m; };
+  if (!('serviceWorker' in navigator)) return fail('This page needs a browser with service workers (not a private window in Firefox).');
+  const tries = +(sessionStorage.pgBoot || 0);
+  if (tries > 3) { sessionStorage.pgBoot = 0; return fail('Could not start. Reload to try again.'); }
+  sessionStorage.pgBoot = tries + 1;
+  const go = () => {
+    const rest = location.pathname.slice(BASE.length);
+    if (rest === '' || rest === 'index.html' || rest === '404.html') location.replace(BASE + 'font' + location.search);
+    else location.reload();
+  };
+  try {
+    await navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE });
+    await navigator.serviceWorker.ready;
+    if (navigator.serviceWorker.controller) go();
+    else navigator.serviceWorker.addEventListener('controllerchange', go, { once: true });
+  } catch (e) { fail('Could not start: ' + e.message); }
+})();
+</script>
