@@ -106,7 +106,14 @@
   function listFor(t) {
     if (!lists[t]) {
       const live = [base, ...(data.texts[t] || [])].map(text => ({ text }));
-      lists[t] = t === 'serif' ? live.concat(data.svg.map(s => ({ text: s.word, svg: s }))) : live;
+      const svg = data.svg.map(s => ({ text: s.word, svg: s }));
+      if (t !== 'serif' || !svg.length) lists[t] = live;
+      else {                                       // the page's own text first, then a live text after every third SVG style
+        const rest = live.slice(1);
+        lists[t] = [live[0]];
+        svg.forEach((s, i) => { lists[t].push(s); if (i % 3 === 2 && rest.length) lists[t].push(rest.shift()); });
+        lists[t].push(...rest);
+      }
     }
     return lists[t];
   }
