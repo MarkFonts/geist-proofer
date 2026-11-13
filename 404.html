@@ -10,9 +10,10 @@
   const BASE = "/geist-proofer/";
   const fail = m => { document.body.textContent = m; };
   if (!('serviceWorker' in navigator)) return fail('This page needs a browser with service workers (not a private window in Firefox).');
-  const tries = +(sessionStorage.pgBoot || 0);
-  if (tries > 3) { sessionStorage.pgBoot = 0; return fail('Could not start. Reload to try again.'); }
-  sessionStorage.pgBoot = tries + 1;
+  // stop only if this page keeps coming back: more than three starts within ten seconds
+  const now = Date.now(), starts = (sessionStorage.pgBoot || '').split(',').map(Number).filter(t => now - t < 10000);
+  if (starts.length > 3) { sessionStorage.pgBoot = ''; return fail('Could not start. Reload to try again.'); }
+  sessionStorage.pgBoot = starts.concat(now).join();
   const go = () => {
     const rest = location.pathname.slice(BASE.length);
     if (rest === '' || rest === 'index.html' || rest === '404.html') location.replace(BASE + 'font' + location.search);
@@ -21,8 +22,9 @@
   try {
     await navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE });
     await navigator.serviceWorker.ready;
-    if (navigator.serviceWorker.controller) go();
-    else navigator.serviceWorker.addEventListener('controllerchange', go, { once: true });
+    // Once the worker is active, the next ordinary load is served by it. Do not wait for it to
+    // take control of THIS page: after a hard reload (Cmd+Shift+R) the browser never lets it.
+    go();
   } catch (e) { fail('Could not start: ' + e.message); }
 })();
 </script>
