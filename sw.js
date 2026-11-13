@@ -22,7 +22,7 @@ const redirect = to => new Response(null, { status: 302, headers: { Location: to
 async function handle(req, path, search) {
   if (req.method === 'POST') return new Response(null, { status: 204 });   // analytics beacons
   if (path === '/' || path === '/index.html') return redirect(BASE + 'font' + search);
-  if (path.startsWith('/addon/')) return fetch(BASE + path.slice(1));
+  if (path.startsWith('/addon/')) return fetch(BASE + path.slice(1), { cache: 'no-cache' });   // always the published version
   if (path.startsWith('/_blob/') && /\.(mp4|webm|mov)$/.test(path)) return redirect(BLOB + path.slice(6) + search);
   let url = path + search;
   if (path.endsWith('/_next/image')) {                             // serve the original, not an optimized copy
