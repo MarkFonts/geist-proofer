@@ -312,23 +312,96 @@
   // playground by its control rows), so everything below them jumps. Before the switch, note
   // where the thing in view sits; for the next moment, scroll by whatever it moved.
   const FONTS = new Set(['Sans', 'Serif', 'Mono', 'Pixel']);
+
+  // Lock: every section down to the playground keeps the tallest height it has in any font, so
+  // the padding under it is reserved and a font switch moves nothing below. The locks are rules
+  // in a stylesheet, addressed by position, because the page replaces some sections outright on
+  // every switch and an inline style would be thrown away with them.
+  // Heights that only depend on the typeface are measured up front, by laying a hidden copy out
+  // in each of the four fonts. Anything else (a stats row one font has and another lacks, the
+  // playground's control rows) is learned the first time that font is shown and remembered for
+  // this window width; holdStill covers that first time.
+  const lockSheet = new CSSStyleSheet();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, lockSheet];
+  let lockWidth = -1, locks = [], ctl = 0, stg = 0, written = '';
+  const store = () => { try { localStorage['pgLock' + lockWidth] = JSON.stringify({ locks, ctl, stg }); } catch (e) {} };
+  function lockHeights() {
+    const p = find();
+    if (!p) return;
+    const all = [...document.querySelectorAll('section')];
+    const secs = all.slice(0, all.indexOf(p.box.closest('section')) + 1);
+    if (!secs.length) return;
+    const sel = s => `.${CSS.escape(s.parentElement.classList[0])} > section:nth-of-type(${[...s.parentElement.children].filter(c => c.tagName === 'SECTION').indexOf(s) + 1})`;
+    const controls = p.box.previousElementSibling;
+    if (innerWidth !== lockWidth) {
+      lockWidth = innerWidth;
+      lockSheet.replaceSync(written = '');
+      try { ({ locks = [], ctl = 0, stg = 0 } = JSON.parse(localStorage['pgLock' + lockWidth] || '{}')); } catch (e) { locks = []; ctl = 0; stg = 0; }
+      const fams = [...document.querySelectorAll('label')].filter(l => FONTS.has(l.textContent.trim()))
+        .map(l => getComputedStyle(l).fontFamily);
+      secs.forEach((s, i) => {
+        if (s.querySelector('button, input, select, textarea')) return;      // plain text sections only
+        for (const fam of fams) {
+          const c = s.cloneNode(true);
+          c.style.cssText += `;position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:${s.offsetWidth}px;min-height:0`;
+          c.style.setProperty('--current-font', fam);
+          s.parentElement.append(c);
+          locks[i] = Math.max(locks[i] || 0, Math.ceil(c.getBoundingClientRect().height));
+          c.remove();
+        }
+      });
+    }
+    let changed = false;
+    const editing = mode === 'edit';                                         // typed text may be any length
+    // the playground's control rows: keep the height of the most rows any font has, rows packed
+    // at the top, so the text under them does not ride up and down
+    if (controls) {
+      const h = Math.ceil(controls.scrollHeight);
+      if (h > ctl) { ctl = h; changed = true; }
+      if (controls.style.minHeight !== ctl + 'px') { controls.style.minHeight = ctl + 'px'; controls.style.alignContent = 'flex-start'; }
+    }
+    // the two lines are set smaller in some fonts: pad under them up to the tallest, so the block
+    // the page centers is always the same height and its top stays where it is
+    const sh = Math.ceil(p.stage.getBoundingClientRect().height);
+    if (!editing && sh > stg) { stg = sh; changed = true; }
+    const under = Math.max(0, stg - sh) + 'px';
+    if (p.stage.style.marginBottom !== under) p.stage.style.marginBottom = under;
+    const rules = secs.map((s, i) => {
+      const last = i === secs.length - 1;
+      const h = Math.ceil(s.getBoundingClientRect().height);
+      if (!(last && editing) && h > (locks[i] || 0)) { locks[i] = h; changed = true; }
+      return locks[i] && !(last && editing) ? `${sel(s)} { min-height: ${locks[i]}px; }` : '';
+    }).join('\n');
+    if (rules !== written) lockSheet.replaceSync(written = rules);
+    if (changed) store();
+  }
+
   let hold = 0;
+  // what to hold: the proofer text if it is on screen, otherwise the section that fills most of
+  // the window. Returned as a lookup, not a node: the page may replace the section on the switch.
   function inView() {
-    const p = find(), mid = innerHeight / 2;
-    if (p) { const r = p.stage.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) return p.stage; }
-    return [...document.querySelectorAll('section')].find(s => { const r = s.getBoundingClientRect(); return r.top <= mid && r.bottom >= mid; });
+    const p = find();
+    if (p) { const r = p.stage.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) return () => { const q = find(); return q && q.stage; }; }
+    let best = -1, most = 0;
+    document.querySelectorAll('section').forEach((s, i) => {
+      const r = s.getBoundingClientRect(), seen = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+      if (seen > most) { most = seen; best = i; }
+    });
+    return best < 0 ? null : () => document.querySelectorAll('section')[best];
   }
   function holdStill(e) {
     const label = e.target.closest && e.target.closest('label');
     if (!label || !FONTS.has(label.textContent.trim()) || scrollY < 1) return;
-    const el = inView();
-    if (!el) return;
-    const top = el.getBoundingClientRect().top, id = ++hold, until = performance.now() + 900;
+    const get = inView();
+    if (!get || !get()) return;
+    const top = get().getBoundingClientRect().top, id = ++hold, until = performance.now() + 900;
     const stop = () => { hold++; };
     addEventListener('wheel', stop, { once: true, passive: true });
     addEventListener('touchmove', stop, { once: true, passive: true });
     (function step() {
-      if (id !== hold || !el.isConnected) return;
+      sync(); lockHeights();          // apply the locks in the same frame the page changes
+      const el = get();
+      if (id !== hold || !el) return;
       const moved = el.getBoundingClientRect().top - top;
       if (Math.abs(moved) > 0.5) scrollBy({ top: moved, behavior: 'instant' });
       if (performance.now() < until) requestAnimationFrame(step);
@@ -345,6 +418,7 @@
     data = d;
     sync();
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter(s => s !== pre);
-    setInterval(sync, 250);   // follows tab switches, the size and align controls, and React re-renders
+    lockHeights();
+    setInterval(() => { sync(); lockHeights(); }, 250);   // follows tab switches, the size and align controls, and React re-renders
   });
 })();
