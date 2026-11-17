@@ -103,9 +103,33 @@
     return cut < 0 ? [t] : [t.slice(0, cut), t.slice(cut + 1)];
   }
 
+  // Live tabs: every click also jumps to another weight the page ships, never the neighbouring one.
+  const weightSelect = () => document.querySelector('select#weight');
+  const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  function scatter(items) {
+    const n = items.length, gcd = (a, b) => b ? gcd(b, a % b) : a;
+    if (n < 3) return items.slice();
+    let stride = Math.floor(n / 2);
+    while (gcd(stride, n) !== 1) stride++;
+    return items.map((_, i) => items[i * stride % n]);
+  }
+  function setWeight(w) {
+    const sel = weightSelect();
+    if (!sel || w == null || sel.value === w) return;
+    selectSetter.call(sel, w);
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   function listFor(t) {
     if (!lists[t]) {
-      const live = [base, ...(data.texts[t] || [])].map(text => ({ text }));
+      const sel = weightSelect();
+      const shipped = sel ? [...sel.options].filter(o => !o.disabled).map(o => o.value) : [];
+      // the page carries the weight across tabs, so start from Regular, not from wherever the last tab stopped
+      const start = !sel ? null : shipped.includes('400') ? '400' : sel.value;
+      const order = scatter(shipped), at = Math.max(0, order.indexOf(start));
+      const jumps = order.slice(at + 1).concat(order.slice(0, at));  // carry on from the page's own weight, which is sample 1
+      const live = [base, ...(data.texts[t] || [])].map((text, i) =>
+        ({ text, w: i === 0 || !jumps.length ? start : jumps[(i - 1) % jumps.length] }));
       const svg = data.svg.map(s => ({ text: s.word, svg: s }));
       if (t !== 'serif' || !svg.length) lists[t] = live;
       else {                                       // the page's own text first, then a live text after every third SVG style
@@ -125,6 +149,7 @@
     step = custom ? 0 : (step + 1) % list.length;
     custom = false;
     setText(p.ta, list[step].text);
+    if (!list[step].svg) setWeight(list[step].w);
     sync();
   }
   function setMode(m, focus) {
@@ -149,6 +174,7 @@
     const list = listFor(tab);
     // the page carries the text across tabs: keep typed text, otherwise start the new tab's list
     if (switched && !custom) setText(p.ta, list[0].text);
+    if (switched) setWeight(list[0].w);
     let sample = list[step];
     // typed text (or the page's own Reset) no longer matches the sample
     if (p.ta.value !== sample.text) {
