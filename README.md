@@ -25,17 +25,19 @@ text moves again with its own control rows. The proper fix is in the page: give 
 sections the same height for every font (reserve the missing stats row, and a fixed number of
 control rows in the playground).
 
-This copy patches it from the outside, in `addon/playground.js`:
+This copy patches it from the outside, with reserved padding only (`lockHeights` in
+`addon/playground.js`); the page is never scrolled to compensate:
 
-- `lockHeights` reserves padding: every section down to the playground keeps the tallest height
-  it has in any font, the playground's control rows keep the height of the most rows, and the
-  two sample lines are padded up to the tallest font. Text-only sections are measured in all
-  four fonts on load; the rest is learned the first time a font is shown and remembered per
-  window width.
-- `holdStill` covers that first time: it notes where the thing in view sits before a font
-  switch and scrolls by whatever it moved.
-
-Once each font has been shown once, a switch moves nothing and scrolls nothing.
+- The server HTML of all four fonts is fetched on load, laid out hidden at the window's width,
+  and measured, so every font's layout is known before the first switch.
+- Each section down to the playground gets the height of its tallest font. Sections whose copies
+  match the real thing get that as an exact height, so content that is briefly taller while it
+  loads (the Pixel posters, by 87 px) cannot push the page either.
+- The playground's control rows keep the height of the most rows any font has.
+- The two sample lines are padded above so the first baseline sits at the same height in every
+  font (the guide is 27/32 of the type size down, and Mono and Pixel are set smaller), and below
+  so the block keeps one height. The View / Edit toggle hangs under that padding, so it stays at
+  one height too.
 
 ## Credits
 

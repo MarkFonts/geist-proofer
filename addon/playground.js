@@ -9,12 +9,13 @@
    Edit (pencil)     The text is a text field in the live font. An SVG sample cannot be typed
                      in, so Edit switches to the live style with that sample's text.
 
-   It also keeps the page still when the font changes (see holdStill below).
+   It also keeps the page still when the font changes, with reserved padding (see lockHeights).
 
    The mode only changes through the toggle (or Escape, back to View). Samples come from
    samples.json (see build.py). */
 (() => {
   const NS = 'http://www.w3.org/2000/svg';
+  const DROP = 27 / 32;     // first baseline guide, as a share of the type size
   const FAMILY = { sans: 'Geist Sans', serif: 'Geist Serif', mono: 'Geist Mono', pixel: 'Geist Pixel' };
   // Geist icons, 16 x 16: magnifying-glass and pencil-edit
   const ICON = {
@@ -83,17 +84,6 @@
     valueSetter.call(ta, v);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   };
-  // where the first line's baseline sits inside the textarea, so an SVG sample lands on the same line
-  const ctx = document.createElement('canvas').getContext('2d');
-  function baselineOf(cs) {
-    const fs = parseFloat(cs.fontSize);
-    ctx.font = `${cs.fontWeight} ${fs}px ${cs.fontFamily}`;
-    const m = ctx.measureText('Hx');
-    const asc = m.fontBoundingBoxAscent || fs * 0.8, desc = m.fontBoundingBoxDescent || fs * 0.2;
-    const lh = parseFloat(cs.lineHeight) || fs;
-    return parseFloat(cs.paddingTop) + (lh - (asc + desc)) / 2 + asc;
-  }
-
   // a sample's own line break, or the break on a space that leaves the two lines closest in length
   function twoLines(text) {
     const t = text.trim();
@@ -208,10 +198,11 @@
     const H = padT + 2 * lh + padB;
     p.stage.style.minHeight = H + 'px';
     p.stage.style.height = mode === 'view' ? H + 'px' : '';
-    // the page puts its first guide on the first line's baseline: take that as the baseline
+    // The page rules its first guide 27/32 of the type size down, in every font. Computed, not
+    // read off the page's guide, which animates in and gives a wrong reading mid-way.
     const rule = p.stage.querySelector(':scope > div[class*="auto-rows"] > div');
-    const ruleY = rule ? rule.getBoundingClientRect().top - p.stage.getBoundingClientRect().top : 0;
-    const rise1 = Math.round((ruleY > 1 ? ruleY : baselineOf(cs)) - padT);
+    const rise1 = Math.round(fs * DROP);
+    p.stage.dataset.rise = padT + rise1;        // first baseline, from the top of the stage (lockHeights)
     const key = mode !== 'view' ? '' : [svgSample ? 'svg' + step : p.ta.value, fs, lh, W, rise1, cs.textAlign, cs.fontFamily, cs.fontWeight,
       cs.fontStyle, cs.fontVariationSettings, cs.fontFeatureSettings, cs.letterSpacing, cs.color].join('|');
     if (hit.dataset.key !== key) {
@@ -294,9 +285,7 @@
       p.stage.append(bar);
     }
     for (const b of bar.querySelectorAll('button[data-mode]')) b.setAttribute('aria-checked', b.dataset.mode === mode);
-    // room for the bar is added below the tester only, so the lines above it never move
-    const room = Math.max(0, Math.ceil(bar.getBoundingClientRect().bottom - p.box.getBoundingClientRect().bottom + 16)) + 'px';
-    if (p.box.style.marginBottom !== room) p.box.style.marginBottom = room;
+
     const weight = document.querySelector('select#weight');
     const weightName = weight && weight.selectedOptions[0] ? weight.selectedOptions[0].textContent.replace(/\s*\(.*\)/, '') : '';
     const name = svgSample ? `<b>${svgSample.style}</b> · ${svgSample.note}` : `<b>${FAMILY[tab] || 'Geist'}${weightName ? ' ' + weightName : ''}</b>`;
@@ -307,24 +296,67 @@
     if (nameEl.dataset.html !== html) { nameEl.dataset.html = html; nameEl.innerHTML = html; }
   }
 
-  // Patch: switching the font (Sans / Serif / Mono / Pixel) must not push what you are looking at
-  // up or down. The page's sections differ in height per font (the stats block by one row, the
-  // playground by its control rows), so everything below them jumps. Before the switch, note
-  // where the thing in view sits; for the next moment, scroll by whatever it moved.
-  const FONTS = new Set(['Sans', 'Serif', 'Mono', 'Pixel']);
-
-  // Lock: every section down to the playground keeps the tallest height it has in any font, so
-  // the padding under it is reserved and a font switch moves nothing below. The locks are rules
-  // in a stylesheet, addressed by position, because the page replaces some sections outright on
-  // every switch and an inline style would be thrown away with them.
-  // Heights that only depend on the typeface are measured up front, by laying a hidden copy out
-  // in each of the four fonts. Anything else (a stats row one font has and another lacks, the
-  // playground's control rows) is learned the first time that font is shown and remembered for
-  // this window width; holdStill covers that first time.
+  // Patch: switching the font (Sans / Serif / Mono / Pixel) must not push anything up or down.
+  // The page's sections differ in height per font (the stats block by a row, the text block by
+  // its line breaks, the playground by its control rows and type size), so everything below them
+  // jumps. This is fixed with reserved padding only; the page is never scrolled.
+  //
+  // The layout of all four fonts is known up front: the server HTML of each font is fetched, its
+  // sections are laid out here, hidden, at this window's width, and measured. From that:
+  //   - every section down to the playground keeps the tallest height it has in any font. The
+  //     locks are stylesheet rules addressed by position, because the page replaces some
+  //     sections outright on every switch and an inline style would go with them;
+  //   - the playground's control rows keep the height of the most rows any font has;
+  //   - the two sample lines are padded above so the first baseline is always the deepest font's
+  //     distance down, and below so the block keeps one height; the View / Edit toggle hangs
+  //     under that padding.
+  const FONTS = ['sans', 'serif', 'mono', 'pixel'];
+  const pages = Promise.all(FONTS.map(t =>                       // starts before the page has hydrated
+    fetch(location.pathname + (t === 'sans' ? '' : '?type=' + t)).then(r => r.ok ? r.text() : '').catch(() => '')));
   const lockSheet = new CSSStyleSheet();
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, lockSheet];
-  let lockWidth = -1, locks = [], ctl = 0, stg = {}, written = '';
-  const store = () => { try { localStorage['pgLock' + lockWidth] = JSON.stringify({ locks, ctl, stg }); } catch (e) {} };
+  let lockWidth = -1, locks = [], exact = [], ctl = 0, stg = {}, written = '', html = null;
+  const playground = doc => { const h = [...doc.querySelectorAll('h2')].find(e => e.textContent.trim() === 'Interactive font playground'); return h && h.parentElement; };
+
+  function measureAll(p, secs) {
+    if (!html) return;
+    const fams = {};
+    for (const l of document.querySelectorAll('label')) { const t = l.textContent.trim().toLowerCase(); if (FONTS.includes(t)) fams[t] = getComputedStyle(l).fontFamily; }
+    const heights = secs.map(() => ({}));
+    FONTS.forEach((t, k) => {
+      if (!html[k]) return;
+      const doc = new DOMParser().parseFromString(html[k], 'text/html');
+      // nothing in the copies may load: images keep their width and height attributes, which is
+      // all the layout needs
+      doc.querySelectorAll('img, video, source, iframe').forEach(e => ['src', 'srcset', 'poster'].forEach(a => e.removeAttribute(a)));
+      const theirs = [...doc.querySelectorAll('section')];
+      secs.forEach((s, i) => {
+        if (!theirs[i]) return;
+        const c = document.importNode(theirs[i], true);
+        c.inert = true;
+        c.style.cssText += `;position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:${s.offsetWidth}px;min-height:0`;
+        if (fams[t]) c.style.setProperty('--current-font', fams[t]);
+        s.parentElement.append(c);
+        heights[i][t] = Math.ceil(c.getBoundingClientRect().height);
+        const pg = playground(c), ta = pg && pg.querySelector('textarea');
+        if (pg && pg.children[1]) ctl = Math.max(ctl, Math.ceil(pg.children[1].getBoundingClientRect().height));
+        if (ta && t !== tab) {
+          const cs = getComputedStyle(ta), fs = parseFloat(cs.fontSize), lh = parseFloat(cs.lineHeight) || fs;
+          const padT = parseFloat(cs.paddingTop), padB = parseFloat(cs.paddingBottom);
+          stg[t] = { h: Math.ceil(padT + 2 * lh + padB), r: padT + Math.round(fs * DROP) };
+        }
+        c.remove();
+      });
+    });
+    // trust a section's copies only if the copy of the font on screen came out the height of the
+    // real thing; otherwise that section is learned as fonts are shown
+    secs.forEach((s, i) => {
+      const real = s.getBoundingClientRect().height, last = i === secs.length - 1;
+      exact[i] = !last && Math.abs((heights[i][tab] || 0) - real) <= 2;
+      if (last || exact[i]) locks[i] = Math.max(0, ...Object.values(heights[i]));
+    });
+  }
+
   function lockHeights() {
     const p = find();
     if (!p) return;
@@ -333,98 +365,77 @@
     if (!secs.length) return;
     const sel = s => `.${CSS.escape(s.parentElement.classList[0])} > section:nth-of-type(${[...s.parentElement.children].filter(c => c.tagName === 'SECTION').indexOf(s) + 1})`;
     const controls = p.box.previousElementSibling;
-    if (innerWidth !== lockWidth) {
+    if (innerWidth !== lockWidth) {                                          // first run, or the window was resized
       lockWidth = innerWidth;
       lockSheet.replaceSync(written = '');
-      try { ({ locks = [], ctl = 0, stg = {} } = JSON.parse(localStorage['pgLock' + lockWidth] || '{}')); } catch (e) { locks = []; ctl = 0; }
-      if (typeof stg !== 'object' || !stg) stg = {};
-      const fams = [...document.querySelectorAll('label')].filter(l => FONTS.has(l.textContent.trim()))
-        .map(l => getComputedStyle(l).fontFamily);
-      secs.forEach((s, i) => {
-        if (s.querySelector('button, input, select, textarea')) return;      // plain text sections only
-        for (const fam of fams) {
-          const c = s.cloneNode(true);
-          c.style.cssText += `;position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:${s.offsetWidth}px;min-height:0`;
-          c.style.setProperty('--current-font', fam);
-          s.parentElement.append(c);
-          locks[i] = Math.max(locks[i] || 0, Math.ceil(c.getBoundingClientRect().height));
-          c.remove();
-        }
-      });
+      locks = []; exact = []; ctl = 0; stg = {};
+      if (controls) controls.style.minHeight = '';
+      measureAll(p, secs);
     }
-    let changed = false;
     const editing = mode === 'edit';                                         // typed text may be any length
-    // the playground's control rows: keep the height of the most rows any font has, rows packed
-    // at the top, so the text under them does not ride up and down
-    if (controls) {
-      const h = Math.ceil(controls.scrollHeight);
-      if (h > ctl) { ctl = h; changed = true; }
+    if (controls) {                                                          // rows packed at the top of the reserved height
+      ctl = Math.max(ctl, Math.ceil(controls.getBoundingClientRect().height));
       if (controls.style.minHeight !== ctl + 'px') { controls.style.minHeight = ctl + 'px'; controls.style.alignContent = 'flex-start'; }
     }
-    // The two lines are set smaller in some fonts. Pad under them up to the tallest font's (each
-    // font's current height, so the Size slider still counts), and hang the View / Edit toggle
-    // under that padding: the block the page centers keeps one height, its top stays put, and
-    // the toggle sits at the same height whatever the preview's height.
-    const sh = Math.ceil(p.stage.getBoundingClientRect().height);
-    if (!editing && stg[tab] !== sh) { stg[tab] = sh; changed = true; }
-    const under = Math.max(0, Math.max(0, ...Object.values(stg)) - sh);
+    // each font's current measurements are used, so the Size slider still counts
+    const sh = Math.ceil(p.stage.getBoundingClientRect().height), rise = +p.stage.dataset.rise || 0;
+    if (!editing && rise) stg[tab] = { h: sh, r: rise };
+    const seen = Object.values(stg);
+    const deepest = Math.max(0, ...seen.map(v => v.r));
+    const above = Math.max(0, deepest - (stg[tab] ? stg[tab].r : deepest));
+    const total = Math.max(0, ...seen.map(v => deepest - v.r + v.h));
+    const under = Math.max(0, total - above - sh);
+    if (p.stage.style.marginTop !== above + 'px') p.stage.style.marginTop = above + 'px';
     if (p.stage.style.marginBottom !== under + 'px') p.stage.style.marginBottom = under + 'px';
     const bar = p.stage.querySelector(':scope > .pg-bar');
     const barTop = `calc(100% + ${28 + under}px)`;
     if (bar && bar.style.top !== barTop) bar.style.top = barTop;
+    // room for the toggle and its label, added below the tester only (after the toggle is placed,
+    // or a stale position would be reserved)
+    if (bar) {
+      const room = Math.max(0, Math.ceil(bar.getBoundingClientRect().bottom - p.box.getBoundingClientRect().bottom + 16)) + 'px';
+      if (p.box.style.marginBottom !== room) p.box.style.marginBottom = room;
+    }
     const rules = secs.map((s, i) => {
       const last = i === secs.length - 1;
-      const h = Math.ceil(s.getBoundingClientRect().height);
-      if (!(last && editing) && h > (locks[i] || 0)) { locks[i] = h; changed = true; }
+      // A section measured in all four fonts gets that exact height: it cannot grow, so content
+      // that is briefly taller while it loads or animates (the Pixel posters are, by 87 px)
+      // overflows for that moment instead of pushing the page. The rest keep a minimum that
+      // rises to the tallest seen.
+      if (exact[i]) return `${sel(s)} { height: ${locks[i]}px; overflow: visible; }`;
+      if (!(last && editing)) locks[i] = Math.max(locks[i] || 0, Math.ceil(s.getBoundingClientRect().height));
       return locks[i] && !(last && editing) ? `${sel(s)} { min-height: ${locks[i]}px; }` : '';
     }).join('\n');
     if (rules !== written) lockSheet.replaceSync(written = rules);
-    if (changed) store();
   }
 
-  let hold = 0;
-  // what to hold: the proofer text if it is on screen, otherwise the section that fills most of
-  // the window. Returned as a lookup, not a node: the page may replace the section on the switch.
-  function inView() {
-    const p = find();
-    if (p) { const r = p.stage.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) return () => { const q = find(); return q && q.stage; }; }
-    let best = -1, most = 0;
-    document.querySelectorAll('section').forEach((s, i) => {
-      const r = s.getBoundingClientRect(), seen = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
-      if (seen > most) { most = seen; best = i; }
-    });
-    return best < 0 ? null : () => document.querySelectorAll('section')[best];
-  }
-  function holdStill(e) {
+  // The padding differs per font, so it has to change in the same frame the page does: after a
+  // click or key on the font tabs, re-apply on every frame for a moment instead of waiting for
+  // the next 250 ms tick.
+  let burst = 0;
+  function onFontSwitch(e) {
     const label = e.target.closest && e.target.closest('label');
-    if (!label || !FONTS.has(label.textContent.trim()) || scrollY < 1) return;
-    const get = inView();
-    if (!get || !get()) return;
-    const top = get().getBoundingClientRect().top, id = ++hold, until = performance.now() + 900;
-    const stop = () => { hold++; };
-    addEventListener('wheel', stop, { once: true, passive: true });
-    addEventListener('touchmove', stop, { once: true, passive: true });
+    if (!label || !FONTS.includes(label.textContent.trim().toLowerCase())) return;
+    const id = ++burst, until = performance.now() + 700;
     (function step() {
-      sync(); lockHeights();          // apply the locks in the same frame the page changes
-      const el = get();
-      if (id !== hold || !el) return;
-      const moved = el.getBoundingClientRect().top - top;
-      if (Math.abs(moved) > 0.5) scrollBy({ top: moved, behavior: 'instant' });
+      if (id !== burst) return;
+      sync(); lockHeights();
       if (performance.now() < until) requestAnimationFrame(step);
     })();
   }
-  document.addEventListener('click', holdStill, true);       // capture: before the page reacts
-  document.addEventListener('keydown', holdStill, true);     // arrow keys on the font tabs
+  document.addEventListener('click', onFontSwitch, true);
+  document.addEventListener('keydown', onFontSwitch, true);
 
   // Take over as soon as React has hydrated the text field (it then carries React's own keys),
   // one beat later so the nodes added here are never part of what React checks.
   const hydrated = () => { const p = find(); return p && Object.keys(p.ta).some(k => k.startsWith('__reactProps')); };
   const ready = new Promise(done => { const t = setInterval(() => { if (hydrated()) { clearInterval(t); setTimeout(done, 150); } }, 40); });
-  Promise.all([fetch('/addon/samples.json').then(r => r.json()), ready]).then(([d]) => {
+  Promise.all([fetch('/addon/samples.json').then(r => r.json()), ready, pages]).then(([d, , texts]) => {
     data = d;
+    html = texts;
     sync();
-    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(s => s !== pre);
     lockHeights();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(s => s !== pre);
     setInterval(() => { sync(); lockHeights(); }, 250);   // follows tab switches, the size and align controls, and React re-renders
   });
 })();
