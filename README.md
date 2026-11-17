@@ -9,6 +9,27 @@ type proofer near the bottom has two default actions, picked with a View / Edit 
 
 https://markfonts.github.io/geist-proofer/
 
+## Flag for the original page: switching fonts moves the page
+
+On vercel.com/font, switching between Sans, Serif, Mono, and Pixel pushes the glyph inspector and
+the playground up or down, because two sections above them change height with the font.
+Measured at 1280 px wide:
+
+| Section | Sans | Serif | Mono | Pixel |
+| --- | --- | --- | --- | --- |
+| Stats block under the hero ("About Geist …") | 538 px | 474 px | 538 px | 474 px |
+| Playground | 730 px | 786 px | 709 px | 709 px |
+
+So the glyph inspector jumps 64 px between Sans or Mono and Serif or Pixel, and the playground
+text moves again with its own control rows. The proper fix is in the page: give those two
+sections the same height for every font (reserve the missing stats row, and a fixed number of
+control rows in the playground).
+
+This copy patches it from the outside instead: `holdStill` in `addon/playground.js` notes where
+the thing in view sits before a font switch and scrolls by whatever it moved, so it stays put.
+
+## Credits
+
 The page, its code, fonts, and media are Vercel's, unchanged; they are here only to show the
 proposal in context. The addition is `addon/playground.js`. Videos play from Vercel's own storage.
 Because the original page needs a server, a small service worker (`sw.js`) serves the copy.

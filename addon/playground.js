@@ -9,6 +9,8 @@
    Edit (pencil)     The text is a text field in the live font. An SVG sample cannot be typed
                      in, so Edit switches to the live style with that sample's text.
 
+   It also keeps the page still when the font changes (see holdStill below).
+
    The mode only changes through the toggle (or Escape, back to View). Samples come from
    samples.json (see build.py). */
 (() => {
@@ -304,6 +306,36 @@
     const nameEl = bar.querySelector('.pg-name');
     if (nameEl.dataset.html !== html) { nameEl.dataset.html = html; nameEl.innerHTML = html; }
   }
+
+  // Patch: switching the font (Sans / Serif / Mono / Pixel) must not push what you are looking at
+  // up or down. The page's sections differ in height per font (the stats block by one row, the
+  // playground by its control rows), so everything below them jumps. Before the switch, note
+  // where the thing in view sits; for the next moment, scroll by whatever it moved.
+  const FONTS = new Set(['Sans', 'Serif', 'Mono', 'Pixel']);
+  let hold = 0;
+  function inView() {
+    const p = find(), mid = innerHeight / 2;
+    if (p) { const r = p.stage.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) return p.stage; }
+    return [...document.querySelectorAll('section')].find(s => { const r = s.getBoundingClientRect(); return r.top <= mid && r.bottom >= mid; });
+  }
+  function holdStill(e) {
+    const label = e.target.closest && e.target.closest('label');
+    if (!label || !FONTS.has(label.textContent.trim()) || scrollY < 1) return;
+    const el = inView();
+    if (!el) return;
+    const top = el.getBoundingClientRect().top, id = ++hold, until = performance.now() + 900;
+    const stop = () => { hold++; };
+    addEventListener('wheel', stop, { once: true, passive: true });
+    addEventListener('touchmove', stop, { once: true, passive: true });
+    (function step() {
+      if (id !== hold || !el.isConnected) return;
+      const moved = el.getBoundingClientRect().top - top;
+      if (Math.abs(moved) > 0.5) scrollBy({ top: moved, behavior: 'instant' });
+      if (performance.now() < until) requestAnimationFrame(step);
+    })();
+  }
+  document.addEventListener('click', holdStill, true);       // capture: before the page reacts
+  document.addEventListener('keydown', holdStill, true);     // arrow keys on the font tabs
 
   // Take over as soon as React has hydrated the text field (it then carries React's own keys),
   // one beat later so the nodes added here are never part of what React checks.
