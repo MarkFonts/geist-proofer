@@ -323,7 +323,7 @@
   // this window width; holdStill covers that first time.
   const lockSheet = new CSSStyleSheet();
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, lockSheet];
-  let lockWidth = -1, locks = [], ctl = 0, stg = 0, written = '';
+  let lockWidth = -1, locks = [], ctl = 0, stg = {}, written = '';
   const store = () => { try { localStorage['pgLock' + lockWidth] = JSON.stringify({ locks, ctl, stg }); } catch (e) {} };
   function lockHeights() {
     const p = find();
@@ -336,7 +336,8 @@
     if (innerWidth !== lockWidth) {
       lockWidth = innerWidth;
       lockSheet.replaceSync(written = '');
-      try { ({ locks = [], ctl = 0, stg = 0 } = JSON.parse(localStorage['pgLock' + lockWidth] || '{}')); } catch (e) { locks = []; ctl = 0; stg = 0; }
+      try { ({ locks = [], ctl = 0, stg = {} } = JSON.parse(localStorage['pgLock' + lockWidth] || '{}')); } catch (e) { locks = []; ctl = 0; }
+      if (typeof stg !== 'object' || !stg) stg = {};
       const fams = [...document.querySelectorAll('label')].filter(l => FONTS.has(l.textContent.trim()))
         .map(l => getComputedStyle(l).fontFamily);
       secs.forEach((s, i) => {
@@ -360,12 +361,17 @@
       if (h > ctl) { ctl = h; changed = true; }
       if (controls.style.minHeight !== ctl + 'px') { controls.style.minHeight = ctl + 'px'; controls.style.alignContent = 'flex-start'; }
     }
-    // the two lines are set smaller in some fonts: pad under them up to the tallest, so the block
-    // the page centers is always the same height and its top stays where it is
+    // The two lines are set smaller in some fonts. Pad under them up to the tallest font's (each
+    // font's current height, so the Size slider still counts), and hang the View / Edit toggle
+    // under that padding: the block the page centers keeps one height, its top stays put, and
+    // the toggle sits at the same height whatever the preview's height.
     const sh = Math.ceil(p.stage.getBoundingClientRect().height);
-    if (!editing && sh > stg) { stg = sh; changed = true; }
-    const under = Math.max(0, stg - sh) + 'px';
-    if (p.stage.style.marginBottom !== under) p.stage.style.marginBottom = under;
+    if (!editing && stg[tab] !== sh) { stg[tab] = sh; changed = true; }
+    const under = Math.max(0, Math.max(0, ...Object.values(stg)) - sh);
+    if (p.stage.style.marginBottom !== under + 'px') p.stage.style.marginBottom = under + 'px';
+    const bar = p.stage.querySelector(':scope > .pg-bar');
+    const barTop = `calc(100% + ${28 + under}px)`;
+    if (bar && bar.style.top !== barTop) bar.style.top = barTop;
     const rules = secs.map((s, i) => {
       const last = i === secs.length - 1;
       const h = Math.ceil(s.getBoundingClientRect().height);
